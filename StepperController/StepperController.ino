@@ -28,17 +28,19 @@
 #define DIRECTION_FLAG_BIT _BV(4)
 #define FEED_FLAG_BITS 0b1111
 
-class CommandList {
+class Stepper {
 
 private:
 	class Command {
 		Command *_next;
 		uint8_t _count;
-		uint8_t _flags;		
+		uint8_t _feed;
+		uint8_t _flags;
 
 	public:
-		Command(uint8_t count, uint8_t flags) {
+		Command(uint8_t count, uint8_t feed, uint8_t flags) {
 			_count = count;
+			_feed = feed;
 			_flags = flags;
 			_next = NULL;
 		}
@@ -54,12 +56,18 @@ private:
 				_next->add(command);
 		}
 
-		uint8_t getMax() {
-			return _count;
+
+		uint8_t step() {
+			_count--;
+			//return _count;
 		}
 
 		uint8_t getCount() {
-			return _count--;
+			return _count;
+		}
+
+		uint8_t getFeed() {
+			return (_feed);
 		}
 
 		uint8_t getFlags() {
@@ -73,12 +81,6 @@ private:
 		bool getStep() {
 			return (_flags & STEP_FLAG_BIT);
 		}
-
-		uint8_t getFeed() {
-			return (_flags & FEED_FLAG_BITS);
-		}
-
-
 	};
 
 	class Command *_head;
@@ -87,7 +89,7 @@ private:
 
 public:
 
-	CommandList(int8_t stepPin, int8_t directionPin) {
+	Stepper(int8_t stepPin, int8_t directionPin) {
 		_directionPin = directionPin;
 		_stepPin = stepPin;
 		_head = NULL;
@@ -101,34 +103,34 @@ public:
 			_head->add(command);
 	}
 
-	bool loadCommand() {
-		Command *head = _head;
-		if (head) {
-			digitalWrite(_directionPin, getDirection());
-			digitalWrite(_stepPin, getStep());
-			digitalWrite(_stepPin, LOW);
-
-			if (head->getCount() <= 0) { 
-				_head = head->next();
-				delete head;
-				return true;
-			}
+	bool step() {
+		if (_head) {
+			if (digitalRead(_stepPin)) {
+				digitalWrite(_stepPin, LOW);
+				if (head->getCount() <= 0)
+					return true;
+			} 
+			else {
+				digitalWrite(_stepPin, HIGH);
+				_head->step();
+			}			
 		}
 		return false;
 	}
 
+	bool next() {
+		Command *head = _head;
+		if (head) {
 
+			_head = head->next();
+			delete head;
 
-	bool hasStep() {
-		return (_head != NULL);
-	}
+			if (_head)
+				digitalWrite(_directionPin, getDirection());
 
-	bool getStep() {
-		return (_head && _head->getStep());
-	}
-
-	bool getDirection() {
-		return (_head && _head->getDirection());
+			return true;
+		}
+		return false;
 	}
 
 	uint8_t getFeed() {
@@ -151,8 +153,6 @@ bool _isTimer;
 bool _isTransmission;
 bool _dataRequested;
 
-class CommandList *_m1CommandList;
-class CommandList *_m2CommandList;
 
 void timerSetup() {
 	noInterrupts();						//Disable interrupts
@@ -163,6 +163,7 @@ void timerSetup() {
 
 	interrupts();						//Enable interrupts 	
 }
+class Stepper *_middle, *_proximal;
 
 void setup() 
 {
