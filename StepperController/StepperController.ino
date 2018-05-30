@@ -1,32 +1,25 @@
 #include <inttypes.h>
 #include <Wire.h>
 
-#define FASTEST_STEP 5
-
-#define BUTTON_PIN 3
-
 #define M1_STEP_PIN 9
 #define M1_DIRECTION_PIN 8
 #define M2_STEP_PIN 7
 #define M2_DIRECTION_PIN 6
 
+//Microstep Pins
 #define MS1_PIN 16
 #define MS2_PIN 14
 #define MS3_PIN 15
-
-#define PROXIMAL_PHALANX_LENGTH 1
-#define MIDDLE_PHALANX_LENGTH 1
-#define DISTAL_PHALANX_LENGTH 1
 
 #define NUM_MOTORS 2
 
 #define TIME_OUT 500
 
-#define BASE_COMPARE_REGISTER 28
+#define BASE_COMPARE_REGISTER 18	//Fastest Step Speed
 
-#define STEP_FLAG_BIT _BV(5)
-#define DIRECTION_FLAG_BIT _BV(4)
-#define FEED_FLAG_BITS 0b1111
+#define STEP_FLAG_BIT _BV(5)		
+#define DIRECTION_FLAG_BIT _BV(4)	
+#define FEED_FLAG_BITS 0b1111	
 
 class Stepper {
 
@@ -145,25 +138,14 @@ public:
 uint8_t _timer;
 uint16_t _timeOutCount;
 
-
-
 uint16_t _m1Count, _m2Count, _m1Max, _m2Max;
 
 bool _isTimer;
 bool _isTransmission;
 bool _dataRequested;
 
-
-void timerSetup() {
-	noInterrupts();						//Disable interrupts
-	TCCR1A = 0;
-	TCCR1B = 0;
-
-	TCCR1B = _BV(WGM12) | _BV(CS12) | _BV(CS10);	//CTC Mode with a 1024 prescaler	
-
-	interrupts();						//Enable interrupts 	
-}
 class Stepper *_middle, *_proximal;
+bool _hasMiddle, _hasProximal;
 
 void setup() 
 {
@@ -245,14 +227,14 @@ void updateMax() {
 	Serial.println(m2Feed);
 }
 
-void timerStop() {
-
-	Serial.println("Stopping Timer!");
-
-	_isTimer = false;
+void timerSetup() {
 	noInterrupts();						//Disable interrupts
-	TIMSK1 &= ~_BV(OCIE1A);				//Output compare register A Disable
-	interrupts();						//Enable interrupts
+	TCCR1A = 0;
+	TCCR1B = 0;
+
+	TCCR1B = _BV(WGM12) | _BV(CS12) | _BV(CS10);	//CTC Mode with a 1024 prescaler	
+
+	interrupts();						//Enable interrupts 	
 }
 
 void timerStart() {
@@ -274,6 +256,16 @@ void timerStart() {
 	Serial.print("m2 Max Count - ");
 	Serial.println(_m2Max);
 
+	interrupts();						//Enable interrupts
+}
+
+void timerStop() {
+
+	Serial.println("Stopping Timer!");
+
+	_isTimer = false;
+	noInterrupts();						//Disable interrupts
+	TIMSK1 &= ~_BV(OCIE1A);				//Output compare register A Disable
 	interrupts();						//Enable interrupts
 }
 
