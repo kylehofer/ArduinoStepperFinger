@@ -15,11 +15,13 @@
 
 #define TIME_OUT 500
 
-#define BASE_COMPARE_REGISTER 18	//Fastest Step Speed
+#define BASE_COMPARE_REGISTER 62	//Fastest Step Speed
 
 #define STEP_FLAG_BIT _BV(5)		
 #define DIRECTION_FLAG_BIT _BV(4)	
-#define FEED_FLAG_BITS 0b1111	
+#define FEED_FLAG_BITS 0b1111
+#define DATA_TYPE_FLAG _BV(7)
+#define MOTOR_FLAG _BV(6)
 
 class Stepper {
 
@@ -31,9 +33,8 @@ private:
 		uint8_t _flags;
 
 	public:
-		Command(uint8_t count, uint8_t feed, uint8_t flags) {
+		Command(uint8_t flags, uint8_t count) {
 			_count = count;
-			_feed = feed;
 			_flags = flags;
 			_next = NULL;
 		}
@@ -49,10 +50,8 @@ private:
 				_next->add(command);
 		}
 
-
 		uint8_t step() {
 			_count--;
-			//return _count;
 		}
 
 		uint8_t getCount() {
@@ -60,11 +59,7 @@ private:
 		}
 
 		uint8_t getFeed() {
-			return (_feed);
-		}
-
-		uint8_t getFlags() {
-			return _flags;
+			return (_flags & FEED_FLAG_BITS);
 		}
 
 		bool getDirection() {
@@ -79,6 +74,7 @@ private:
 	class Command *_head;
 	int8_t _directionPin;
 	int8_t _stepPin;
+	bool _isStep;
 
 public:
 
@@ -86,10 +82,11 @@ public:
 		_directionPin = directionPin;
 		_stepPin = stepPin;
 		_head = NULL;
+		_isStep = true;
 	}
 
-	void addCommand(uint8_t count, uint8_t flags) {
-		class Command *command = new Command(count, flags);
+	void addCommand(uint8_t flags, uint8_t count) {
+		class Command *command = new Command(flags, count);
 		if (!_head)
 			_head = command;
 		else
@@ -98,17 +95,19 @@ public:
 
 	bool step() {
 		if (_head) {
-			if (digitalRead(_stepPin)) {
+			if (!_isStep) {
 				digitalWrite(_stepPin, LOW);
-				if (head->getCount() <= 0)
-					return true;
+				_isStep = true;
+				if (_head->getCount() == 0)
+					return false;
 			} 
 			else {
-				digitalWrite(_stepPin, HIGH);
+				digitalWrite(_stepPin, _head->getStep());
+				_isStep = false;
 				_head->step();
 			}			
 		}
-		return false;
+		return true;
 	}
 
 	bool next() {
@@ -118,10 +117,12 @@ public:
 			_head = head->next();
 			delete head;
 
-			if (_head)
-				digitalWrite(_directionPin, getDirection());
+			if (_head) {
+				digitalWrite(_directionPin, head->getDirection());
+				return true;
+			}
 
-			return true;
+			
 		}
 		return false;
 	}
@@ -131,14 +132,15 @@ public:
 	}
 
 	uint8_t getCount() {
-		return (_head) ? _head->getMax() : 255;
+		return (_head) ? _head->getCount() : 255;
 	}
 };
 
 uint8_t _timer;
 uint16_t _timeOutCount;
 
-uint16_t _m1Count, _m2Count, _m1Max, _m2Max;
+uint16_t _feedRate;
+uint16_t _OCR1BMax;
 
 bool _isTimer;
 bool _isTransmission;
@@ -147,11 +149,17 @@ bool _dataRequested;
 class Stepper *_middle, *_proximal;
 bool _hasMiddle, _hasProximal;
 
+bool (*timer1COMPA)();
+bool (*timer1COMPB)();
+
+
 void setup() 
 {
 	_timer = 0;
 	_isTransmission = false;
 	_dataRequested = false;
+
+	_feedRate = BASE_COMPARE_REGISTER;
 
 	Wire.begin(0x8);// join i2c bus with address #8
 	Wire.onReceive(recieveData); // register event
@@ -172,59 +180,74 @@ void setup()
 	digitalWrite(MS2_PIN, HIGH);
 	digitalWrite(MS3_PIN, LOW);
 
-	_m1CommandList = new CommandList(M1_STEP_PIN, M1_DIRECTION_PIN);
-	_m2CommandList = new CommandList(M2_STEP_PIN, M2_DIRECTION_PIN);
+	_middle = new Stepper(M1_STEP_PIN, M1_DIRECTION_PIN);
+	_proximal = new Stepper(M2_STEP_PIN, M2_DIRECTION_PIN);
 
 	timerSetup();
 
 }
 
-ISR(TIMER1_COMPA_vect) {
-	bool maxUpdate = false;
+void updateFeed() {
+	uint8_t mFeed = _middle->getFeed(), pFeed = _proximal->getFeed();
 
-	_m1Count += OCR1A;
-	_m2Count += OCR1A;
+	_hasMiddle = true;
+	_hasProximal = true;
 
-	if (_m1Count >= _m1Max) {
-		_m1Count = 0;
-		maxUpdate = _m1CommandList->loadCommand();
+	if (mFeed < pFeed) {
+		OCR1B =  _feedRate;
+		_OCR1BMax = OCR1B;
+		OCR1A = (_feedRate * mFeed) / pFeed;
+		timer1COMPB = &middleStep;
+		timer1COMPA = &proximalStep;
+	} else {
+		OCR1B = _feedRate;
+		_OCR1BMax = OCR1B;
+		OCR1A  = (_feedRate  * pFeed) / mFeed;
+		timer1COMPB = &proximalStep;
+		timer1COMPA = &middleStep;
 	}
+}
 
-	if (_m2Count >= _m2Max) {
-		_m2Count = 0;
-		maxUpdate |= _m2CommandList->loadCommand();
+bool nextCommand() {
+	if (_middle->next() & _proximal->next()) {
+		updateFeed();
+		return true;
 	}
+	return false;
+}
 
-	if (maxUpdate)
-		updateMax();
+bool middleStep() {
+	if (!_middle->step()) {
+		if (!_hasProximal) {
+			return nextCommand();
+		}
+		else
+			_hasMiddle = false;
+	}
+	return true;
+}
 
-	if (_m1CommandList->hasStep() || _m2CommandList->hasStep())
-		OCR1A = min((_m1Max - _m1Count), (_m2Max - _m2Count));
-	else
+bool proximalStep() {
+	if (!_proximal->step()) {
+		if (!_hasMiddle) {
+			return nextCommand();
+		}
+		else
+			_hasProximal = false;
+	}
+	return true;
+}
+
+ISR(TIMER1_COMPB_vect) {
+	//OCR1B += _OCR1BMax;
+	if (!(*timer1COMPB)())
 		timerStop();
 }
 
-void updateMax() {
-	uint8_t m1Feed = _m1CommandList->getFeed();
-	uint8_t m2Feed = _m2CommandList->getFeed();
-
-	if (m1Feed == 0) m1Feed = 1;
-	if (m2Feed == 0) m2Feed = 1;
-
-	if (m1Feed < m2Feed) {
-		_m1Max = BASE_COMPARE_REGISTER;
-		_m2Max = (BASE_COMPARE_REGISTER / m1Feed) * m2Feed;
-	}
-	else {
-		_m1Max = (BASE_COMPARE_REGISTER / m2Feed) * m1Feed;
-		_m2Max = BASE_COMPARE_REGISTER;
-	}
-
-	Serial.print("m1Feed - ");
-	Serial.println(m1Feed);
-
-	Serial.print("m2Feed - ");
-	Serial.println(m2Feed);
+ISR(TIMER1_COMPA_vect) {
+	//OCR1B -= OCR1A;
+	if (!(*timer1COMPA)())
+		timerStop();
 }
 
 void timerSetup() {
@@ -232,7 +255,7 @@ void timerSetup() {
 	TCCR1A = 0;
 	TCCR1B = 0;
 
-	TCCR1B = _BV(WGM12) | _BV(CS12) | _BV(CS10);	//CTC Mode with a 1024 prescaler	
+	TCCR1B = _BV(WGM12) | _BV(CS12);	//CTC Mode with a 256 prescaler	
 
 	interrupts();						//Enable interrupts 	
 }
@@ -244,17 +267,13 @@ void timerStart() {
 	_isTimer = true;
 	noInterrupts();						//Disable interrupts
 
-	TIMSK1 |= _BV(OCIE1A);				//Output compare register A enabled
+	TCNT1 = 0;
 
-	updateMax();
+	TIMSK1 |= _BV(OCIE1A) | _BV(OCIE1B);				//Output compare register A enabled
 
-	OCR1A = min(_m1Max, _m2Max);		//Output compare register value
+	//updateMax();
 
-	Serial.print("m1 Max Count - ");
-	Serial.println(_m1Max);
-
-	Serial.print("m2 Max Count - ");
-	Serial.println(_m2Max);
+	//OCR1A = min(_m1Max, _m2Max);		//Output compare register value
 
 	interrupts();						//Enable interrupts
 }
@@ -266,6 +285,7 @@ void timerStop() {
 	_isTimer = false;
 	noInterrupts();						//Disable interrupts
 	TIMSK1 &= ~_BV(OCIE1A);				//Output compare register A Disable
+	TIMSK1 &= ~_BV(OCIE1B);				//Output compare register A Disable
 	interrupts();						//Enable interrupts
 }
 
@@ -284,25 +304,45 @@ void masterRequest() {
 	//	while (Wire.available() <= 0 && _timeOutCount < TIME_OUT) { _timeOutCount++; delay(1); }	
 }
 
+void recieveCommands(uint8_t flags, uint8_t count) {
+	Serial.print("Command Flags:");
+	Serial.println(flags,2);
+	Serial.print("Command Count:");
+	Serial.println(count,2);
+	if ((flags & MOTOR_FLAG) > 0) {
+		_middle->addCommand(flags, count);
+	} else {
+		_proximal->addCommand(flags, count);
+	}
+}
 void recieveData(int size) {
 	_isTransmission = true;
+	bool commandRecieved = false;
 
 	while (Wire.available() > 0) {
-		//Serial.println("Recieving - ");
+		uint8_t data = Wire.read();
 
-		uint8_t flags = Wire.read();
-		uint8_t count = Wire.read();		
+		//Serial.print("Data:");
+		//Serial.println(data,2);
 
-		_m1CommandList->addCommand(count, flags);
+		if ((data ^ DATA_TYPE_FLAG) > 0) {
+			recieveCommands(data, Wire.read());
+			commandRecieved = true;
+		}
+		else {
 
-		flags = Wire.read();
-		count = Wire.read();		
-
-		_m2CommandList->addCommand(count, flags);
+		}
 	}
 
-	if (!_isTimer)
+	if (_dataRequested)
+		Wire.write(true);
+
+	if (commandRecieved & !_isTimer) {
+		updateFeed();
 		timerStart();
+	}
+	_isTransmission = false;
+}
 
 	//if (_dataRequested)
 	//	Wire.write(true);
