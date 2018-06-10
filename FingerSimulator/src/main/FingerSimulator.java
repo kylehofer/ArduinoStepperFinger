@@ -8,7 +8,150 @@ import javax.swing.*;
 
 public class FingerSimulator extends JFrame {
 	
-	private static class SimulationPanel extends JPanel {
+	private Finger _finger;
+	private interface IPhalange {
+		void updateAngle(double angle);
+	}
+	
+	private interface IPhalangeListener { 
+		void phalangeUpdated();
+	}
+	
+	private class Phalange {
+		
+		private Phalange _joint;
+		private List<IPhalangeListener> _listeners;
+		
+		private double _length;
+		private Point2D.Double _point;
+		private Point2D.Double _offsetPoint;
+		private double _angle;
+		private double _offsetAngle;
+		
+		private boolean _hasSlider;
+		private boolean _linkedPrevious;
+		
+		private void updatePoint() {
+			_point.x = _offsetPoint.x + 
+					_length * Math.sin(_angle + _offsetAngle);
+			_point.y = _offsetPoint.y + 
+					_length * Math.cos(_angle + _offsetAngle);
+			
+			if (_joint != null)
+				_joint.updateAngle(_offsetAngle, _angle);
+			
+			for (IPhalangeListener l : _listeners)
+	            l.phalangeUpdated();
+		}
+		
+		public double getAngle() {
+			return _angle;
+		}
+		
+		public void setAngle(double value) {
+			_angle = value;
+			updatePoint();
+		}
+		
+		public Point2D.Double getPoint() {
+			return _point;
+		}
+		
+		public double getLength() {
+			return _length;
+		}
+		
+		public boolean hasSlider() {
+			return _hasSlider;
+		}
+		
+		public void addListener(IPhalangeListener value) {
+			_listeners.add(value);
+		}
+		
+		public Phalange(Phalange joint, double length, boolean hasSlider, boolean linkedPrevious) {
+			
+			_length = length;
+			_angle = 0;
+			_offsetAngle = 0;
+			_point = new Point2D.Double(0,0);
+			_offsetPoint = new Point2D.Double(0,0);
+			_hasSlider = hasSlider;
+			_linkedPrevious = linkedPrevious;
+			
+			_listeners = new ArrayList<IPhalangeListener>();
+			
+			_joint = joint;
+			
+			if (joint != null)
+				joint.setOffset(_point);
+		}
+
+		public void updateAngle(double offsetAngle, double angle) {
+			if (_linkedPrevious) {
+				_offsetAngle = angle + offsetAngle;
+				_angle = angle;
+			}
+			else
+				_offsetAngle = angle + offsetAngle;
+			
+			updatePoint();
+		}
+		public void setOffset(Point2D.Double offset) {
+			_offsetPoint = offset;
+		}		
+	}	
+	
+	private class Finger {
+		
+		private static final double DISTAL_LENGTH = 23.0F * SCALER;
+		private static final double MIDDLE_LENGTH = 38.0F * SCALER;
+		private static final double PROXIMAL_LENGTH = 75.0F * SCALER;
+		
+		private Phalange _distal;
+		private Phalange _middle;
+		private Phalange _proximal;
+		
+		public Phalange getDistal() {
+			return _distal;
+		}
+		
+		public Phalange getMiddle() {
+			return _middle;
+		}
+		
+		public Phalange getProximal() {
+			return _proximal;
+		}
+		
+		public Point2D.Double getDistalPoint() {
+			return _distal.getPoint();
+		}
+		
+		public Point2D.Double getMiddlePoint() {
+			return _middle.getPoint();
+		}
+		
+		public Point2D.Double getProximalPoint() {
+			return _proximal.getPoint();
+		}
+		
+		public Finger() {
+			
+			_distal = new Phalange(null, DISTAL_LENGTH, false, true);
+			_middle = new Phalange(_distal, MIDDLE_LENGTH, true ,false);
+			_proximal = new Phalange(_middle, PROXIMAL_LENGTH, true ,false);
+			
+			//_proximal.setAngle(1.25);
+			//_middle.setAngle(0.75);
+			//_distal.setAngle(2);
+			
+			_proximal.updatePoint();
+		}
+		
+	}
+	
+	private static class SimulationPanel extends JPanel implements IPhalangeListener {
 		
 		private static final int PREF_W = 600;
 		private static final int PREF_H = 600;
