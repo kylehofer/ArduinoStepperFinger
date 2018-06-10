@@ -10,14 +10,15 @@ import javax.swing.event.ChangeListener;
 import java.util.ArrayList;
 import java.util.List;
 
-import java.math.*;
-
 import java.awt.geom.Point2D;
-import java.awt.geom.Point2D.Float;
 
 
 public class FingerSimulator extends JFrame {
 	
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = -5872034986175365620L;
 	private static final double MOTOR_STEP = 1.8; //In degrees	
 	private static final int SCALER = 2;
 	private static final double RADIAN_TO_DEGREES = Math.PI / 180;
@@ -30,11 +31,6 @@ public class FingerSimulator extends JFrame {
 	private DataPanel _proximalData;
 	private SimulationPanel _simulationPanel;
 	private Finger _finger;
-	
-	
-	private interface IPhalange {
-		void updateAngle(double angle);
-	}
 	
 	private interface IPhalangeListener { 
 		void phalangeUpdated();
@@ -165,10 +161,6 @@ public class FingerSimulator extends JFrame {
 			_middle = new Phalange(_distal, MIDDLE_LENGTH, true ,false);
 			_proximal = new Phalange(_middle, PROXIMAL_LENGTH, true ,false);
 			
-			//_proximal.setAngle(1.25);
-			//_middle.setAngle(0.75);
-			//_distal.setAngle(2);
-			
 			_proximal.updatePoint();
 		}
 		
@@ -176,6 +168,7 @@ public class FingerSimulator extends JFrame {
 	
 	private static class SimulationPanel extends JPanel implements IPhalangeListener {
 		
+		private static final long serialVersionUID = 127045778703041639L;
 		private static final int PREF_W = 600;
 		private static final int PREF_H = 600;
 		
@@ -183,8 +176,7 @@ public class FingerSimulator extends JFrame {
 		private static final int JOINT_DIAMETER = (JOINT_RADIUS << 1);
 		private static final int TIP_RADIUS = 10 * SCALER;
 		private static final int TIP_DIAMETER = (TIP_RADIUS << 1);
-		
-		
+
 		private Finger _finger;
 		
 		private int getOriginX() {
@@ -194,7 +186,6 @@ public class FingerSimulator extends JFrame {
 		private int getOriginY() {
 			return this.getHeight() - 200;
 		}
-
 
 		public SimulationPanel(Finger finger) {
 			_finger = finger;
@@ -238,10 +229,7 @@ public class FingerSimulator extends JFrame {
 			super.paintComponent(g);
 			g.drawLine(0,this.getHeight() - 200, this.getWidth(), this.getHeight() - 200);
 			g.drawLine(getOriginX(),0, getOriginX(), this.getHeight());
-			drawFinger(g);
-			//g.drawOval(_finger., y, width, height);
-			
-			
+			drawFinger(g);	
 	}
 
 		public Dimension getPreferredSize() {
@@ -251,7 +239,6 @@ public class FingerSimulator extends JFrame {
 		@Override
 		public void phalangeUpdated() {
 			this.repaint();
-			// TODO Auto-generated method stub
 			
 		}
 	}
@@ -260,11 +247,9 @@ public class FingerSimulator extends JFrame {
 	
 	private static class DataPanel extends JPanel implements ActionListener, ChangeListener, IPhalangeListener {
 		
+		private static final long serialVersionUID = -704085048705110485L;
 
-		//PLACE HOLDERS
-		//TODO Remove
 		private static final int SLIDER_MIN = 0;
-		private static final int SLIDER_MAX = 90;
 		
 		private static final int PREF_W = 222;
 		private static final int PREF_H = 87;
@@ -274,12 +259,10 @@ public class FingerSimulator extends JFrame {
 		private JLabel _labelY;
 		private JLabel _textAngle;
 		private JLabel _textX;
-		private JLabel _textY;
+		private JLabel _textY;		
+		private JSlider _sliderAngle;	
 		
-		private JSlider _sliderAngle;		
-		
-		private Phalange _phalange;
-		
+		private Phalange _phalange;		
 
 		public DataPanel(String title, Phalange phalange) {
 			
@@ -301,7 +284,6 @@ public class FingerSimulator extends JFrame {
 	        constraints.anchor = GridBagConstraints.WEST;
 	        constraints.insets = new Insets(5, 5, 5, 5);
 	         
-	        // add components to the panel
 	        constraints.gridx = 0;
 	        constraints.gridy = 0;     
 	        add(_labelAngle, constraints);
@@ -325,10 +307,8 @@ public class FingerSimulator extends JFrame {
 				_sliderAngle = new JSlider(JSlider.HORIZONTAL,
 						SLIDER_MIN, _maxStep, SLIDER_MIN);
 				
-				//_sliderAngle.addActionListener(this);
 				_sliderAngle.addChangeListener(this);
 				
-				//Turn on labels at major tick marks.
 				_sliderAngle.setMajorTickSpacing(10);
 				_sliderAngle.setMinorTickSpacing(1);
 				_sliderAngle.setPaintTicks(true);	
@@ -339,10 +319,7 @@ public class FingerSimulator extends JFrame {
 		        constraints.anchor = GridBagConstraints.CENTER;
 		        add(_sliderAngle, constraints);
 			}
-	         
-	        
-	         
-			
+
 			setBorder(BorderFactory.createTitledBorder(
 	                BorderFactory.createEtchedBorder(), title));
 		}
@@ -368,16 +345,15 @@ public class FingerSimulator extends JFrame {
 
 		@Override
 		public void phalangeUpdated() {
-			//_textAngle.setText(String.format("%.2f", a));
 			_textX.setText(String.format("%.2f", _phalange.getPoint().x));
-			_textY.setText(String.format("%.2f", _phalange.getPoint().y));
-			// TODO Auto-generated method stub
-			
+			_textY.setText(String.format("%.2f", _phalange.getPoint().y));			
 		} 
 		
 	}
 	
 	private static class ControlPanel extends JPanel implements ActionListener {
+
+		private static final long serialVersionUID = -2374712028528866941L;
 
 		public ControlPanel() {
 			setBorder(BorderFactory.createTitledBorder(
@@ -394,8 +370,6 @@ public class FingerSimulator extends JFrame {
     public FingerSimulator() {
 		super("Robotic Finger Simulation");
 		  
-		
-		    
 		//Setting up the main Panels
 		_finger = new Finger();
 		_controlPanel = new ControlPanel();
