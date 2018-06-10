@@ -4,11 +4,34 @@ package main;
 import java.awt.*;
 import java.awt.event.*;
 import javax.swing.*;
+import javax.swing.event.ChangeEvent;
+import javax.swing.event.ChangeListener;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import java.math.*;
+
+import java.awt.geom.Point2D;
+import java.awt.geom.Point2D.Float;
 
 
 public class FingerSimulator extends JFrame {
 	
+	private static final double MOTOR_STEP = 1.8; //In degrees	
+	private static final int SCALER = 2;
+	private static final double RADIAN_TO_DEGREES = Math.PI / 180;
+	private static double _stepValue = MOTOR_STEP;
+	private static int _maxStep = (int)(90 / _stepValue);
+	
+	private ControlPanel _controlPanel;
+	private DataPanel _distalData;
+	private DataPanel _middleData;
+	private DataPanel _proximalData;
+	private SimulationPanel _simulationPanel;
 	private Finger _finger;
+	
+	
 	private interface IPhalange {
 		void updateAngle(double angle);
 	}
@@ -155,55 +178,122 @@ public class FingerSimulator extends JFrame {
 		
 		private static final int PREF_W = 600;
 		private static final int PREF_H = 600;
-
-
-		public SimulationPanel() {
-			// TODO Auto-generated constructor stub
+		
+		private static final int JOINT_RADIUS = 15 * SCALER;
+		private static final int JOINT_DIAMETER = (JOINT_RADIUS << 1);
+		private static final int TIP_RADIUS = 10 * SCALER;
+		private static final int TIP_DIAMETER = (TIP_RADIUS << 1);
+		
+		
+		private Finger _finger;
+		
+		private int getOriginX() {
+			return this.getWidth() >> 1;
+		}
+		
+		private int getOriginY() {
+			return this.getHeight() - 200;
 		}
 
+
+		public SimulationPanel(Finger finger) {
+			_finger = finger;
+			finger.getDistal().addListener(this);
+		}
+		
+		public void drawFinger(Graphics g) {
+			//Graphics g = this.getGraphics();
+			
+			int originX = getOriginX(), originY = getOriginY();
+			int distalX =  originX + (int)_finger.getDistalPoint().x ,
+					distalY = originY - (int)_finger.getDistalPoint().y;
+			
+			int middleX =  originX + (int)_finger.getMiddlePoint().x ,
+					middleY = originY - (int)_finger.getMiddlePoint().y;
+			
+			int proximalX =  originX + (int)_finger.getProximalPoint().x ,
+					proximalY = originY - (int)_finger.getProximalPoint().y;
+			
+			//Drawing Joints			
+			g.fillOval(originX - JOINT_RADIUS, originY - JOINT_RADIUS, JOINT_DIAMETER, JOINT_DIAMETER);			
+			g.fillOval(middleX - JOINT_RADIUS, middleY - JOINT_RADIUS, JOINT_DIAMETER, JOINT_DIAMETER);
+			g.fillOval(proximalX - JOINT_RADIUS, proximalY - JOINT_RADIUS, JOINT_DIAMETER, JOINT_DIAMETER);
+			
+			//Drawing Tip
+			g.fillOval(distalX - TIP_RADIUS, distalY - TIP_RADIUS, TIP_DIAMETER, TIP_DIAMETER);
+			
+			//Drawing Stems
+			Graphics2D g2 = (Graphics2D) g;
+			
+			g2.setStroke(new BasicStroke(TIP_DIAMETER >> 1));
+			g2.drawLine(originX, originY, proximalX, proximalY);
+			g2.drawLine(proximalX, proximalY, middleX, middleY);
+			g2.drawLine(middleX, middleY, distalX, distalY);
+			
+			
+		}
+		
+		@Override
 		protected void paintComponent(Graphics g) {
 			super.paintComponent(g);
+			g.drawLine(0,this.getHeight() - 200, this.getWidth(), this.getHeight() - 200);
+			g.drawLine(getOriginX(),0, getOriginX(), this.getHeight());
+			drawFinger(g);
+			//g.drawOval(_finger., y, width, height);
+			
+			
 	}
 
 		public Dimension getPreferredSize() {
 			return new Dimension(PREF_W, PREF_H);
 		}
+
+		@Override
+		public void phalangeUpdated() {
+			this.repaint();
+			// TODO Auto-generated method stub
+			
+		}
 	}
 	
-	private static class DataPanel extends JPanel implements ActionListener {
+	
+	
+	private static class DataPanel extends JPanel implements ActionListener, ChangeListener, IPhalangeListener {
 		
+
 		//PLACE HOLDERS
 		//TODO Remove
 		private static final int SLIDER_MIN = 0;
-		private static final int SLIDER_MAX = 30;
+		private static final int SLIDER_MAX = 90;
+		
+		private static final int PREF_W = 222;
+		private static final int PREF_H = 87;
 		
 		private JLabel _labelAngle;
 		private JLabel _labelX;
 		private JLabel _labelY;
-		private JTextField _textAngle;
-		private JTextField _textX;
-		private JTextField _textY;
+		private JLabel _textAngle;
+		private JLabel _textX;
+		private JLabel _textY;
 		
-		private JSlider sliderAngle;
+		private JSlider _sliderAngle;		
+		
+		private Phalange _phalange;
 		
 
-		public DataPanel(String title) {
+		public DataPanel(String title, Phalange phalange) {
 			
-			//Initialize Components
+			_phalange = phalange;
+			
+			phalange.addListener(this);
+
 			_labelAngle = new JLabel("Angle");
 			_labelX = new JLabel("X");
-			_labelY = new JLabel("Y");
-			_textAngle = new JTextField(5);
-			_textX = new JTextField(5);
-			_textY = new JTextField(5);
+			_labelY = new JLabel("Y");			
 			
-			sliderAngle = new JSlider(JSlider.HORIZONTAL,
-					SLIDER_MIN, SLIDER_MAX, SLIDER_MIN);
-			
-			//Turn on labels at major tick marks.
-			sliderAngle.setMajorTickSpacing(10);
-			sliderAngle.setMinorTickSpacing(1);
-			sliderAngle.setPaintTicks(true);
+			_textAngle = new JLabel(String.format("%.2f", phalange.getAngle()));
+			_textX = new JLabel(String.format("%.2f", phalange.getPoint().x));
+			_textY = new JLabel(String.format("%.2f", phalange.getPoint().y));
 			
 			this.setLayout(new GridBagLayout());
 			
@@ -230,21 +320,59 @@ public class FingerSimulator extends JFrame {
 	        
 	        constraints.gridx = 5;
 	        add(_textY, constraints);
+	        
+			if (phalange.hasSlider()) {
+				_sliderAngle = new JSlider(JSlider.HORIZONTAL,
+						SLIDER_MIN, _maxStep, SLIDER_MIN);
+				
+				//_sliderAngle.addActionListener(this);
+				_sliderAngle.addChangeListener(this);
+				
+				//Turn on labels at major tick marks.
+				_sliderAngle.setMajorTickSpacing(10);
+				_sliderAngle.setMinorTickSpacing(1);
+				_sliderAngle.setPaintTicks(true);	
+				
+				constraints.gridx = 0;
+		        constraints.gridy = 1;
+		        constraints.gridwidth = 6;
+		        constraints.anchor = GridBagConstraints.CENTER;
+		        add(_sliderAngle, constraints);
+			}
 	         
-	        constraints.gridx = 0;
-	        constraints.gridy = 1;
-	        constraints.gridwidth = 6;
-	        constraints.anchor = GridBagConstraints.CENTER;
-	        add(sliderAngle, constraints);
+	        
 	         
 			
 			setBorder(BorderFactory.createTitledBorder(
 	                BorderFactory.createEtchedBorder(), title));
 		}
 		
+		public Dimension getPreferredSize() {
+			return new Dimension(PREF_W, PREF_H);
+		}
+		
+		@Override
+        public void stateChanged(ChangeEvent ce) {
+			
+			int v = ((JSlider) ce.getSource()).getValue();
+			double a = _stepValue * v;
+			
+			_textAngle.setText(String.format("%.2f", a));
+			_phalange.setAngle(a * RADIAN_TO_DEGREES);			
+        }
+		
 		@Override
 		public void actionPerformed(ActionEvent e) {
+			
+		}
+
+		@Override
+		public void phalangeUpdated() {
+			//_textAngle.setText(String.format("%.2f", a));
+			_textX.setText(String.format("%.2f", _phalange.getPoint().x));
+			_textY.setText(String.format("%.2f", _phalange.getPoint().y));
 			// TODO Auto-generated method stub
+			
 		} 
 		
 	}
@@ -266,20 +394,26 @@ public class FingerSimulator extends JFrame {
     public FingerSimulator() {
 		super("Robotic Finger Simulation");
 		  
+		
 		    
 		//Setting up the main Panels
-		ControlPanel controlPanel = new ControlPanel();
-		DataPanel distalData = new DataPanel("Distal Data");
-		DataPanel middleData = new DataPanel("Middle Data");
-		DataPanel proximalData = new DataPanel("Proximal Data");
-		SimulationPanel simulationPanel = new SimulationPanel();
+		_finger = new Finger();
+		_controlPanel = new ControlPanel();
+		_simulationPanel = new SimulationPanel(_finger);
+		_distalData = new DataPanel("Distal Data", _finger.getDistal());
+		_middleData = new DataPanel("Middle Data", _finger.getMiddle());
+		_proximalData = new DataPanel("Proximal Data", _finger.getProximal());
+		
 		
 		// Adding the Panels to the Frame
-		add(controlPanel, BorderLayout.PAGE_START);
-		add(distalData, BorderLayout.LINE_START);
-		add(middleData, BorderLayout.CENTER);
-		add(proximalData, BorderLayout.LINE_END);
-		add(simulationPanel, BorderLayout.PAGE_END);
+		add(_controlPanel, BorderLayout.PAGE_START);
+		add(_simulationPanel, BorderLayout.PAGE_END);
+		add(_distalData, BorderLayout.LINE_END);
+		add(_middleData, BorderLayout.CENTER);
+		add(_proximalData, BorderLayout.LINE_START);
+		
+		
+		setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
 		
 		pack();
 		setLocationRelativeTo(null);
