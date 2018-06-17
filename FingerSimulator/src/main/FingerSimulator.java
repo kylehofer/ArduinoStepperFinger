@@ -1,5 +1,25 @@
+/*
+ * Copyright (c) 2018 Kyle Hofer
+ * Email: kylehofer@neurak.com.au
+ * Web: https://neurak.com.au/
+ *
+ * This file is part of ArduinoStepperFinger.
+ *
+ * ArduinoStepperFinger is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ArduinoStepperFinger is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package main;
-//package components;
 
 import java.awt.*;
 import java.awt.event.*;
@@ -12,15 +32,21 @@ import java.util.List;
 
 import java.awt.geom.Point2D;
 
+/*
+ * 
+ * A simulation program that handles the data of a finger, along with a
+ * window which displays the fingers animation real time. Containing multiple
+ * controls to individually control each part of the finger, and display real time
+ * data of the fingers location in a 2D space. Also allows for controlling an Arduino
+ * connected to stepper motors controlling a real world finger.
+ * 
+ */
 
 public class FingerSimulator extends JFrame {
-	
-	/**
-	 * 
-	 */
+
 	private static final long serialVersionUID = -5872034986175365620L;
-	private static final double MOTOR_STEP = 1.8; //In degrees	
-	private static final int SCALER = 2;
+	private static final double MOTOR_STEP = 1.8; //In degrees
+	private static final int SCALER = 2; //Scales the model for display
 	private static final double RADIAN_TO_DEGREES = Math.PI / 180;
 	private static double _stepValue = MOTOR_STEP;
 	private static int _maxStep = (int)(90 / _stepValue);
@@ -32,18 +58,30 @@ public class FingerSimulator extends JFrame {
 	private SimulationPanel _simulationPanel;
 	private Finger _finger;
 	
+	
+	/*
+	 * Observer pattern used to notify observers of changes to the finger.
+	 */
+	
 	private interface IPhalangeListener { 
 		void phalangeUpdated();
 	}
 	
+	/*
+	 * A class used to control the individual Phalange's of a finger.
+	 * Each phalange is listened to by both the drawing frame, and the control
+	 * frames alerting them to updates. Phalanges also propagate updates from the
+	 * base to the tip to correctly reflect updates in angles.
+	 */
+	
 	private class Phalange {
 		
-		private Phalange _joint;
+		private Phalange _joint; //The next phalange of the finger.
 		private List<IPhalangeListener> _listeners;
 		
 		private double _length;
 		private Point2D.Double _point;
-		private Point2D.Double _offsetPoint;
+		private Point2D.Double _offsetPoint; //Offset of the base Joints
 		private double _angle;
 		private double _offsetAngle;
 		
@@ -121,6 +159,11 @@ public class FingerSimulator extends JFrame {
 		}		
 	}	
 	
+	/*
+	 * A class used to contain the Phalanges of a finger.
+	 * About as simple as that.
+	 */
+	
 	private class Finger {
 		
 		private static final double DISTAL_LENGTH = 23.0F * SCALER;
@@ -166,6 +209,13 @@ public class FingerSimulator extends JFrame {
 		
 	}
 	
+	/*
+	 * 
+	 * JFrame used to contain the drawing of the simulation.
+	 * Observes the Distal Phalange of a finger to detect any updates requiring drawing.
+	 * 
+	 */
+	
 	private static class SimulationPanel extends JPanel implements IPhalangeListener {
 		
 		private static final long serialVersionUID = 127045778703041639L;
@@ -192,8 +242,9 @@ public class FingerSimulator extends JFrame {
 			finger.getDistal().addListener(this);
 		}
 		
+		
+		
 		public void drawFinger(Graphics g) {
-			//Graphics g = this.getGraphics();
 			
 			int originX = getOriginX(), originY = getOriginY();
 			int distalX =  originX + (int)_finger.getDistalPoint().x ,
@@ -243,8 +294,16 @@ public class FingerSimulator extends JFrame {
 		}
 	}
 	
-	
-	
+	/*
+	 * 
+	 * JFrame used to control the movement of a phalange.
+	 * Each Data Panel controls a single phalange of a finger.
+	 * Contains the X, Y Co-ordinates, Angle of the phalange, and a
+	 * Slider used to control the movement of the finger.
+	 * Using the GridBag Layout, on a 5x2 grid.
+	 * 
+	 */
+		
 	private static class DataPanel extends JPanel implements ActionListener, ChangeListener, IPhalangeListener {
 		
 		private static final long serialVersionUID = -704085048705110485L;
@@ -351,6 +410,12 @@ public class FingerSimulator extends JFrame {
 		
 	}
 	
+	/*
+	 * 
+	 * JFrame used to control the settings of the simulation.
+	 * 
+	 */
+	
 	private static class ControlPanel extends JPanel implements ActionListener {
 
 		private static final long serialVersionUID = -2374712028528866941L;
@@ -393,8 +458,6 @@ public class FingerSimulator extends JFrame {
 		setLocationRelativeTo(null);
     }
 
-	
-	
     public static void main(String[] args) {
     	try {
     		UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
