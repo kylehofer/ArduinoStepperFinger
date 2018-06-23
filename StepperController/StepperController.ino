@@ -1,9 +1,30 @@
+/*
+ * Copyright (c) 2018 Kyle Hofer
+ * Email: kylehofer@neurak.com.au
+ * Web: https://neurak.com.au/
+ *
+ * This file is part of ArduinoStepperFinger.
+ *
+ * ArduinoStepperFinger is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * ArduinoStepperFinger is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 #include <inttypes.h>
 
-#define M1_STEP_PIN 9
-#define M1_DIRECTION_PIN 8
-#define M2_STEP_PIN 7
-#define M2_DIRECTION_PIN 6
+#define M1_STEP_PIN _BV(0) 		//SCL Pin 3
+#define M1_DIRECTION_PIN _BV(4)	//Pin 4S
+#define M2_STEP_PIN _BV(1)		//DA Pin 2
+#define M2_DIRECTION_PIN _BV(7)	//Pin 12
 
 //Microstep Pins
 #define MS1_PIN 16
@@ -11,10 +32,14 @@
 #define MS3_PIN 15
 
 #define NUM_MOTORS 2
+#define COMMAND_BYTE_SIZE 6
+#define DBL_COMMAND_BYTE_SIZE (COMMAND_BYTE_SIZE << 1)
+#define MEMORY_LIMIT 500
 
 #define TIME_OUT 500
 
-#define BASE_COMPARE_REGISTER 64	//Fastest Step Speed
+#define BASE_COMPARE_REGISTER 16	//Fastest Step Speed 16th
+//#define BASE_COMPARE_REGISTER 256	//Slowest Step Speed 1
 
 #define STEP_FLAG_BIT _BV(5)		
 #define DIRECTION_FLAG_BIT _BV(4)	
@@ -30,7 +55,6 @@ private:
 	class Command {
 		Command *_next;
 		uint8_t _count;
-		uint8_t _feed;
 		uint8_t _flags;
 
 	public:
@@ -77,6 +101,13 @@ private:
 	int8_t _stepPin;
 	bool _isStep;
 
+	void updateDirection(Command *command) {
+		if (command->getDirection())
+				PORTD |= _directionPin;
+		else
+				PORTD &= ~_directionPin;
+	}
+
 public:
 
 	Stepper(int8_t stepPin, int8_t directionPin) {
@@ -88,42 +119,38 @@ public:
 
 	void addCommand(uint8_t flags, uint8_t count) {
 		class Command *command = new Command(flags, count);
-		if (!_head)
+		if (!_head) {
 			_head = command;
+			updateDirection(_head);
+		}
 		else
 			_head->add(command);
 	}
 
 	bool step() {
-		if (_head) {
 			if (!_isStep) {
-				digitalWrite(_stepPin, LOW);
+				PORTD &= ~_stepPin;
 				_isStep = true;
 				if (_head->getCount() == 0)
 					return false;
 			} 
 			else {
-				digitalWrite(_stepPin, _head->getStep());
+				if (_head->getStep()) PORTD |= _stepPin;
 				_isStep = false;
 				_head->step();
-			}			
-		}
+			}
 		return true;
 	}
 
 	bool next() {
 		Command *head = _head;
 		if (head) {
-
 			_head = head->next();
 			delete head;
-
 			if (_head) {
-				digitalWrite(_directionPin, head->getDirection());
+				updateDirection(_head);
 				return true;
 			}
-
-			
 		}
 		return false;
 	}
@@ -133,7 +160,7 @@ public:
 	}
 
 	uint8_t getCount() {
-		return (_head) ? _head->getCount() : 255;
+		return (_head) ? _head->getCount() : 0;
 	}
 };
 
@@ -153,6 +180,8 @@ bool _hasMiddle, _hasProximal;
 bool (*timer1COMPA)();
 bool (*timer1COMPB)();
 
+uint16_t _commandMemory;
+
 
 void setup() 
 {
@@ -165,21 +194,17 @@ void setup()
 	pinMode(0, INPUT);           // set pin to input
 	digitalWrite(0, HIGH);       // turn on pullup resistors
 
-	pinMode(M1_STEP_PIN, OUTPUT);
-	pinMode(M2_STEP_PIN, OUTPUT);
-	pinMode(M1_DIRECTION_PIN, OUTPUT);
-	pinMode(M2_DIRECTION_PIN, OUTPUT);
+	DDRD |= M1_STEP_PIN | M2_STEP_PIN | M1_DIRECTION_PIN | M2_DIRECTION_PIN; //Setting pins at outputs;
 
 	pinMode(MS1_PIN, OUTPUT);
 	pinMode(MS2_PIN, OUTPUT);
 	pinMode(MS3_PIN, OUTPUT);
 
-	digitalWrite(MS1_PIN, LOW);
+	digitalWrite(MS1_PIN, HIGH);
 	digitalWrite(MS2_PIN, HIGH);
-	digitalWrite(MS3_PIN, LOW);
+	digitalWrite(MS3_PIN, HIGH);
 
 	Serial.begin(115200);
-	Serial1.begin(115200);
 
 	_middle = new Stepper(M1_STEP_PIN, M1_DIRECTION_PIN);
 	_proximal = new Stepper(M2_STEP_PIN, M2_DIRECTION_PIN);
@@ -187,39 +212,31 @@ void setup()
 	timerSetup();
 }
 
-/////////////////////////////////////////////////
-//												/
-//												/
-//				STEP FUNCTIONS					/
-//												/
-//												/
-/////////////////////////////////////////////////
+/*
+ *			STEP FUNCTIONS
+ */
 
 void updateFeed() {
 	uint8_t mFeed = _middle->getFeed(), pFeed = _proximal->getFeed();
 
-	_hasMiddle = true;
-	_hasProximal = true;
+	_hasMiddle = true;//(_middle->getCount() > 0);
+	_hasProximal = true;//(_proximal->getCount() > 0);
 
 	if (mFeed < pFeed) {
 		//_OCR1BMax = _feedRate;
 
-		OCR1A = (_feedRate * pFeed) / mFeed;
-		//OCR1B = _OCR1BMax;
-				
+		OCR1A = (_feedRate * pFeed) / mFeed;		
 		timer1COMPB = &middleStep;
 		timer1COMPA = &proximalStep;
 	} else {
-		//_OCR1BMax = _feedRate;	
-		OCR1A = (_feedRate  * mFeed) / pFeed;
-		//OCR1B = _OCR1BMax;
-			
+		OCR1A = (_feedRate  * mFeed) / pFeed;			
 		timer1COMPB = &proximalStep;
 		timer1COMPA = &middleStep;
 	}
 }
 
 bool nextCommand() {
+	_commandMemory -= DBL_COMMAND_BYTE_SIZE;
 	if (_middle->next() & _proximal->next()) {
 		updateFeed();
 		return true;
@@ -250,13 +267,9 @@ bool proximalStep() {
 	return true;
 }
 
-/////////////////////////////////////////////////
-//												/
-//												/
-//				TIMER FUNCTIONS					/
-//												/
-//												/
-/////////////////////////////////////////////////
+/*
+ *			TIMER FUNCTIONS
+ */
 
 ISR(TIMER1_COMPB_vect) {
 	OCR1B += _OCR1BMax;
@@ -266,8 +279,6 @@ ISR(TIMER1_COMPB_vect) {
 
 ISR(TIMER1_COMPA_vect) {
 	OCR1B -= OCR1A;
-	//if (OCR1B > OCR1A)
-	//	OCR1B = _OCR1BMax;
 	if (!(*timer1COMPA)())
 		timerStop();
 }
@@ -306,77 +317,37 @@ void timerStop() {
 	interrupts();						//Enable interrupts
 }
 
-/////////////////////////////////////////////////
-//												/
-//												/
-//			Communication Functions				/
-//												/
-//												/
-/////////////////////////////////////////////////
+/*
+ *			COMMUNICATION FUNCTION
+ */
 
 void recieveCommands(uint8_t flags, uint8_t count) {
-	Serial.print("Command Flags:");
-	Serial.println(flags,2);
-	Serial.print("Command Count:");
-	Serial.println(count);
 	if ((flags & MOTOR_FLAG) > 0) {
 		_middle->addCommand(flags, count);
 	} else {
 		_proximal->addCommand(flags, count);
 	}
 }
-void recieveFeed(uint8_t flags, uint8_t feedL, uint8_t feedH) {
-
-}
 
 void serialRecieve() {
 
 	bool commandRecieved = false;
 
-	while (Serial1.available() > 0) {
-		uint8_t data = Serial1.read();
-
-		Serial.print("Data:");
-		Serial.println(data,2);
-
-		if (_isTransmission) {
-			if ((data & DATA_TYPE_FLAG) > 0) {
-				recieveCommands(data, Serial1.read());
-				commandRecieved = true;
-			}
-			else if (data == END_OF_MESSAGE) {
-				Serial.println("END OF MESSAGE");
-				if (commandRecieved & !_isTimer) {
-					timerStart();
-				}
-				_isTransmission = false;
-			}
+	while (_commandMemory < MEMORY_LIMIT && Serial.available() > 0) {
+		uint8_t data = Serial.read();
+		if ((data & DATA_TYPE_FLAG) > 0) {
+			recieveCommands(data, Serial.read());
+			_commandMemory += COMMAND_BYTE_SIZE;
+			commandRecieved = true;
 		}
-		else if (data == START_OF_MESSAGE) {
-			Serial.println("START OF MESSAGE");
-			_isTransmission = true;
-		}
-
 	}
-	
-	_isTransmission = false;
+	if (commandRecieved & !_isTimer)
+		timerStart();
 }
 
 void loop() {
-	if (Serial1.available() > 0) {
+	delay(1);
+	if (Serial.available() > 0) {
 		serialRecieve();
 	}
-	/*
-	if (_bOCR1A != OCR1A) {
-		Serial.print("OCR1A: ");
-		Serial.println(OCR1A);
-		_bOCR1A = OCR1A;
-	}
-
-	if (_bOCR1B != OCR1B) {
-		Serial.print("OCR1B: ");
-		Serial.println(OCR1B);
-		_bOCR1B = OCR1B;
-	}
-	*/
 }
