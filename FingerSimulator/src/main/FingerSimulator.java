@@ -31,6 +31,7 @@ import com.fazecast.jSerialComm.*;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -161,10 +162,11 @@ public class FingerSimulator extends JFrame {
 	 * Controls the serial communication with the Arduino.
 	 * Implements Runnable to avoid overflowing the serial data connection.
 	 */
-	private static class ArduinoCommunication implements Runnable {		
+	private static class ArduinoCommunication implements Runnable, SerialPortDataListener {		
 
-		private static final int BUFFER_LIMIT = 58;	//Limit to avoid over saturating the serial communication.	
+		private static final int BUFFER_LIMIT = 64;	//Limit to avoid over saturating the serial communication.	
 		private SerialPort _port;
+		boolean _ready;
 		ArrayList<byte[]> _commands; //List of commands in the buffer
 
 		private final ScheduledExecutorService scheduler =
@@ -174,33 +176,60 @@ public class FingerSimulator extends JFrame {
 
 
 		public ArduinoCommunication(SerialPort port) {
+			_ready = true;
 			_port = port;
+			
+			port.setComPortTimeouts(SerialPort.TIMEOUT_READ_BLOCKING
+					| SerialPort.TIMEOUT_WRITE_BLOCKING, 100, 100); //Applies Write/Read blocking to slow down transmissions to avoid crashes
+			port.addDataListener(this);
+			
 			_commands = new ArrayList<byte[]>();
 		}
 
 		//Add commands, and starts the timer if it is currently not running
-		public boolean writeData(byte[] data) {			
+		public boolean writeData(byte[] data) {
 			_commands.add(data);
+			
 			if (_writeScheduler == null || _writeScheduler.isCancelled())
-				_writeScheduler = scheduler.scheduleAtFixedRate(this, 0, 5000, TimeUnit.MICROSECONDS);
+				_writeScheduler = scheduler.scheduleAtFixedRate(this, 0,
+						300, TimeUnit.MICROSECONDS);  //Applies a small delay to slow down transmissions to avoid crashes
 
 			return false;
 		}
-
-		//Writes data to the arduino, while also throttling data if there's a possibility it'll go over it's buffer limit. 
+		
+		//Writes data to the Arduino, while also throttling communication if there's a possibility it'll go over it's buffer/SRAM
 		@Override
 		public void run() {
-			if (_commands.size() > 0) {
-				if (_port.bytesAwaitingWrite() < BUFFER_LIMIT) {
-					byte[] data = _commands.remove(0);
-					_port.writeBytes(data, data.length);
+			if (_ready) {
+				if (_commands.size() > 0) {
+					int buffer = 0;
+					byte[] output = new byte[BUFFER_LIMIT];
+					while (_commands.size() > 0 && (buffer + _commands.get(0).length) < BUFFER_LIMIT) {	//Organising commands to be sent as a chunk
+						byte[] command = _commands.remove(0);
+						for (int i = 0; i < command.length; i++)
+							output[buffer++] = command[i];
+					}
+					_port.writeBytes(output, buffer);
+					_ready = false;
 				}
-			}
-			else {
-				_writeScheduler.cancel(true);
 			}
 		}
 
+		@Override
+		public int getListeningEvents() {
+			return SerialPort.LISTENING_EVENT_DATA_AVAILABLE;
+		}
+
+		//Event that triggers when data is available.
+		@Override
+		public void serialEvent(SerialPortEvent event) {
+			if (event.getEventType() == SerialPort.LISTENING_EVENT_DATA_AVAILABLE) {
+				byte[] recieved = new byte[_port.bytesAvailable()];
+				_port.readBytes(recieved, 1);
+				_ready = true;		//Data is ready			
+			}			
+			
+		}
 	}
 
 	/*
@@ -667,7 +696,10 @@ public class FingerSimulator extends JFrame {
 			_proximalControl.setStepValue(_stepValue);
 		}
 
-		private void portDisconnect() {
+		private void portDisconnect() {			
+			
+			System.out.print("Is open: ");
+			System.out.println(_arduinoPort.isOpen());
 			if (_arduinoPort.closePort() || !_arduinoPort.isOpen()) {
 				_labelIsConnected.setText("Disconnected");
 				_buttonConnect.setText("Connect");
@@ -690,7 +722,7 @@ public class FingerSimulator extends JFrame {
 				_isConnected = true;	
 				_arduinoPort = serials[i];
 				_arduino = new ArduinoCommunication(_arduinoPort);
-				_arduinoPort.setBaudRate(115200);
+				_arduinoPort.setBaudRate(250000);
 
 				_checkBoxLinked.setEnabled(true);
 				_comboComPorts.setEnabled(false);
@@ -699,11 +731,12 @@ public class FingerSimulator extends JFrame {
 
 		private void simulation() {
 			_mode = SimulationMode.SIMULATION;		//Redundant at the moment since the simulation is ran asynchronously
-
+			
 			int middleMax = (int)(69 / _stepValue);
 			int proximalStep = _maxStep;
 			int middleStep = 0;
-
+			
+			
 			int stepCount;
 
 			double nextY;			
@@ -733,7 +766,7 @@ public class FingerSimulator extends JFrame {
 					_simulator.addCommand(_middleControl, middleStep);
 				}				
 			}			
-			_mode = _isLinked ? SimulationMode.LINKED : SimulationMode.NORMAL;	
+			_mode = _isLinked ? SimulationMode.LINKED : SimulationMode.NORMAL;
 		}
 
 		public ControlPanel() {
@@ -875,47 +908,29 @@ public class FingerSimulator extends JFrame {
 		 * All data is shown as their bit values for ease of reading.
 		 * Data is sent in pairs of 8-byte chunks.
 		 */
-		public void sendCommand(int mSteps, int mFeed, boolean mDirection, boolean mEnabled,
-				int pSteps, int pFeed, boolean pDirection, boolean pEnabled) {
-
-			System.out.print("MDirection:" );
-			System.out.println(mDirection);
-			System.out.print("PDirection:" );
-			System.out.println(pDirection);
-
-
-			byte mData = 0b01000000;		//Middle Motor Command
-			byte pData = 0;					//Proximal Motor Command
-
-			mData |= 0b10000000 | mFeed;
-			pData |= 0b10000000 | pFeed;
-
-			if (mEnabled) {
-				mData |= 0b00100000;		//Enable Middle Motor (00n0 0000)
-				if (mDirection)
-					mData |= 0b00010000;	//Direction (000n 0000)
-			}
-			if (pEnabled) {
-				pData |= 0b00100000;		//Enable Proximal Motor (00n0 0000)
-				if (pDirection)
-					pData |= 0b00010000;	//Direction (000n 0000)
-			}
-
-			byte[] buffer = new byte[4];
+		public void sendCommand(int feed, boolean step, boolean direction, boolean motor) {
+			
+			byte[] buffer = new byte[3];
+			
+			byte data = 0, hFeed = 0, lFeed = 0;			
+			
+			
+			
+			lFeed |= feed;
+			hFeed |= (feed >> 8);
+			
+			data |= 0b10000000;
+			if (motor) data |= 0b1;
+			if (step) data |= 0b10;
+			if (direction) data |= 0b1000;
 
 			int i = 0;
 
-			buffer[i++] = mData;
-			buffer[i++] = (byte)Math.min(mSteps, 255); //Avoid commands over 255 steps in size
-			buffer[i++] = pData;
-			buffer[i++] = (byte)Math.min(pSteps, 255); //Avoid commands over 255 steps in size
+			buffer[i++] = data;
+			buffer[i++] = hFeed;
+			buffer[i++] = lFeed;
 
 			_arduino.writeData(buffer);
-
-			//If a command was over 255 steps, it is split and the remaining movements will be sent.
-			if ((mSteps > 255 && pSteps > 255))
-				sendCommand((mSteps - 255), mFeed, mDirection, mEnabled,
-						(pSteps - 255), pFeed, pDirection, pEnabled);
 		}
 
 		/*
@@ -962,10 +977,21 @@ public class FingerSimulator extends JFrame {
 			if ((_mode == SimulationMode.LINKED || _mode == SimulationMode.SIMULATION) && 
 					(_isConnected && _arduinoPort.isOpen()) && Math.abs(angle) > 0) {				
 				int steps = Math.abs(angle);
-				sendCommand(steps, 1, angle < 0, true, 
-						steps, 1, angle > 0, phalange == _proximalControl);		
+				for	(int i = 0; i < steps; i++) {
+					//public void sendCommand(int feed, boolean step, boolean direction, boolean motor) {
+					//int feed = 8192 / MICROSTEP_VALUES[_comboStepValue.getSelectedIndex()];
+					int feed = 8192 / MICROSTEP_VALUES[_comboStepValue.getSelectedIndex()];
+					if (phalange == _middleControl) {
+						sendCommand(feed, true, angle < 0, false);
+					} else {
+						sendCommand(feed, true, angle < 0, false);
+						sendCommand(feed, true, angle > 0, true);
+					}
+						
+					
+				}					
 			}
-		} 
+		}
 
 	}
 
