@@ -20,44 +20,61 @@
  */
 
 #include <inttypes.h>
-
-#define MIDDLE_STEP_PIN _BV(0) 			//SCL Pin 3
-#define MIDDLE_DIRECTION_PIN _BV(4)		//Pin 4S
-#define PROXIMAL_STEP_PIN _BV(1)		//DA Pin 2
-#define PROXIMAL_DIRECTION_PIN _BV(7)	//Pin 12
+/*
+ * I use the same index for the step and direction in different Port Data registers
+ * while using the same position for the data flags to slightly increase the interrupt functions. 
+ */
+#define STEP_PIN _BV(1)			//PB1 for Middle, PD1 for Proximal
+#define DIRECTION_PIN _BV(3)	//PB3 for Middle, PD3 for Proximal
+#define CLEAR_STEP_DIRECTION_PIN 0b11110101
 
 //Microstep Pins
-#define MS1_PIN 16
-#define MS2_PIN 14
-#define MS3_PIN 15
+#define MS1_PIN 5
+#define MS2_PIN 4
+#define MS3_PIN 3
 
 #define BASE_COMPARE_REGISTER 512	//Fastest Step Speed 16th
-//#define BASE_COMPARE_REGISTER 256	//Slowest Step Speed 1
 
-#define MOTOR_FLAG 1
+#define MOTOR_FLAG_BIT 1
+#define STEP_FLAG_BIT _BV(1)
+#define DIRECTION_FLAG_BIT _BV(3)
+//#define COMPLETE_FLAG_BIT _BV(3)
+#define BUFFER_CHECK_FLAG _BV(6)
 #define COMMAND_FLAG _BV(7)
-
-#define STEP_FLAG_BIT _BV(15)
-#define DIRECTION_FLAG_BIT _BV(14)
+#define SRAM_LIMIT 80				//Limit to avoid overflowing the SRAM
 #define FEED_FLAG_BITS 0x3FFF		//Last 13 bits
 
-uint16_t _middleCommands[255] ;
-uint16_t _proximalCommands[255];
+/*
+ * Struct used to hold the commands for stepper instructions.
+ * Commands are held in two seperate linked queues.
+ * Commands are made up of
+ */
+struct Command {
+public:
+	uint16_t feed;
+	uint8_t flags;
+	Command *tail;
 
-uint8_t _middleIndex, _proximalIndex, _middleTop, _proximalTop = 0;
+	Command(uint8_t flags, uint16_t feed) {
+		this->feed = feed;
+		this->flags = flags;
+		this->tail = NULL;
+	}
+} *_middleHead = NULL, *_middleTail = NULL
+, *_proximalHead = NULL, *_proximalTail = NULL;
 
-bool _isFull;
+uint8_t _commandCount;
+bool _ready;
 
+void setup() {
 
-void setup() 
-{
-	_isFull = false;
+	_commandCount = 0;
+	_ready = true;
 
-	pinMode(0, INPUT);           // set pin to input
-	digitalWrite(0, HIGH);       // turn on pullup resistors
+	DDRB |= (STEP_PIN | DIRECTION_PIN);	//Setting Middle pins at outputs
+	DDRD |= (STEP_PIN | DIRECTION_PIN);	//Setting Proximal pins at outputs
 
-	DDRD |= MIDDLE_STEP_PIN | PROXIMAL_STEP_PIN | MIDDLE_DIRECTION_PIN | PROXIMAL_DIRECTION_PIN; //Setting pins at outputs;
-
+	//Setting the microstepper values for my stepper driver
 	pinMode(MS1_PIN, OUTPUT);
 	pinMode(MS2_PIN, OUTPUT);
 	pinMode(MS3_PIN, OUTPUT);
@@ -66,87 +83,118 @@ void setup()
 	digitalWrite(MS2_PIN, HIGH);
 	digitalWrite(MS3_PIN, HIGH);
 
-	Serial.begin(115200);
+	//Serial.begin(115200);
+	Serial.begin(250000);
 
 	timerSetup();
-}
-
-/*
- *			STEP FUNCTIONS
- */
-
-bool middleStep() {
-	if ((_middleCommands[_middleIndex] & FEED_FLAG_BITS) == 0) {
-		if ((_middleCommands[_middleIndex] & STEP_FLAG_BIT) > 0)
-			PORTD |= MIDDLE_STEP_PIN;
-
-		if ((_middleTop + 1) == _middleIndex)
-				_isFull == false;
-
-		_middleIndex++;
-		if (_middleIndex == _middleTop)
-			stopMiddle();
-		else
-			OCR1A += _middleCommands[_middleIndex];
-	}
-	else {
-		PORTD &= ~MIDDLE_STEP_PIN;
-
-		if ((_middleCommands[_proximalIndex] & DIRECTION_FLAG_BIT) > 0)
-				PORTD |= MIDDLE_DIRECTION_PIN;
-		else
-				PORTD &= ~MIDDLE_DIRECTION_PIN;
-
-		OCR1A += _middleCommands[_middleIndex];
-		_middleCommands[_middleIndex] &= ~FEED_FLAG_BITS;
-	}
-}
-
-bool proximalStep() {
-	if ((_proximalCommands[_proximalIndex] & FEED_FLAG_BITS) == 0) {
-		if ((_proximalCommands[_proximalIndex] & STEP_FLAG_BIT) > 0)
-			PORTD |= PROXIMAL_STEP_PIN;
-
-		if ((_proximalTop + 1) == _proximalIndex)
-				_isFull == false;
-
-		_proximalIndex++;
-		if (_proximalIndex == _proximalTop)
-			stopProximal();
-		else
-			OCR1B += _proximalCommands[_proximalIndex];
-	}
-	else {
-		PORTD &= ~PROXIMAL_STEP_PIN;
-
-		if ((_proximalCommands[_proximalIndex] & DIRECTION_FLAG_BIT) > 0)
-				PORTD |= PROXIMAL_DIRECTION_PIN;
-		else
-				PORTD &= ~PROXIMAL_DIRECTION_PIN;
-
-		OCR1B += _proximalCommands[_proximalIndex];
-		_proximalCommands[_proximalIndex] &= ~FEED_FLAG_BITS;
-	}
 }
 
 /*
  *			TIMER FUNCTIONS
  */
 
-ISR(TIMER1_COMPA_vect) {
-	middleStep();
+//Old function to congregate the two timers into a single easier to edit function
+//However the extra overhead added by this function severely effected performance.
+
+bool step(Command **head, uint8_t *pinRegister, uint16_t *compareRegister) {
+	if ((*head)->feed == 0) {
+		*pinRegister |= (*head)->flags & STEP_FLAG_BIT;
+
+		Command *tail = (*head)->tail;
+		delete (*head);
+		(*head) = NULL;
+
+		_commandCount--;
+
+		if (tail) {
+			(*head) = tail;
+			*compareRegister += (*head)->feed;
+		}
+		else
+			return false;
+	}
+	else {
+		*pinRegister &= CLEAR_STEP_DIRECTION_PIN;
+		*pinRegister |= ((*head)->flags & DIRECTION_FLAG_BIT);
+		*compareRegister += (*head)->feed;
+		(*head)->feed = 0;
+	}
+	return true;
 }
 
+/* 
+ *						Timer1 compare A
+ * The steps are handled in two phases to create an accurate PWM signal.
+ * The first phase involves bringing the signal low, and setting the direction
+ * The second phase involves bringing the signal high, setting the next command
+ */
+ISR(TIMER1_COMPA_vect) {
+	if (_middleHead->feed > 0) { //Phase 1
+		PORTB &= CLEAR_STEP_DIRECTION_PIN;				//Clear Step and Direction
+		PORTB |= (_middleHead->flags & DIRECTION_FLAG_BIT);	//Set Direction
+		OCR1A += _middleHead->feed;
+		_middleHead->feed = 0;
+	}
+	else { //Phase 2
+
+		PORTB |= _middleHead->flags & STEP_FLAG_BIT;	//Raising step if it's enabled in the flags
+
+		Command *tail = _middleHead->tail;
+
+		delete _middleHead;								//Freeing Sram
+		_middleHead = NULL;
+
+		_commandCount--;
+
+		if (tail) {										//Proceeding to the next command
+			_middleHead = tail;
+			OCR1A += _middleHead->feed;
+		}
+		else {											//End of commands
+			_middleTail = NULL;
+			stopMiddle();
+		}
+	}
+}
+
+//Timer1 compare B
 ISR(TIMER1_COMPB_vect) {
-	proximalStep();
+	if (_proximalHead->feed == 0) {
+		PORTD |= (_proximalHead->flags & STEP_FLAG_BIT);
+		
+
+		Command *tail = _proximalHead->tail;
+
+		delete _proximalHead;
+		_proximalHead = NULL;
+
+		_commandCount--;
+
+		if (tail) {			
+			_proximalHead = tail;
+			OCR1B += _proximalHead->feed;
+		}
+		else {
+			_proximalTail = NULL;
+			stopProximal();
+		}
+	}
+	else {		
+		PORTD &= CLEAR_STEP_DIRECTION_PIN;
+		PORTD |= (_proximalHead->flags & DIRECTION_FLAG_BIT);
+		OCR1B += _proximalHead->feed;
+		_proximalHead->feed = 0;
+	}
 }
 
 void timerSetup() {
 	noInterrupts();						//Disable interrupts
 	TCCR1A = 0;
 	TCCR1B = 0;
-	//TCCR1B = _BV(WGM12) | _BV(CS12);	//CTC Mode with a 256 prescaler	
-	TCCR1B = _BV(CS11);	//Normal Mode with a 256 prescaler	
+	TIFR1 |= _BV(OCF1A) | _BV(OCF1B);	//Clearing flagged interrupts	
+	TCCR1B = _BV(CS11);					//Normal Mode with a 256 prescaler
+	OCR1A = 0xFFFF;
+	OCR1B = 0xFFFF;
 	interrupts();						//Enable interrupts 	
 }
 
@@ -158,51 +206,96 @@ void stopProximal() {
 	TIMSK1 &= ~_BV(OCIE1B);				//Output compare register A Disable
 }
 
-void startMiddle() {
-	TIFR1 |= _BV(OCF1A);
-	TIMSK1 |= _BV(OCIE1A);
-	OCR1A = TCNT1 + _middleCommands[_middleIndex];
+void startMiddle(uint16_t feed) {
+	TIMSK1 |= _BV(OCIE1A);				//Output compare register A Enable
+	OCR1A = TCNT1 + feed;				//Start timer for first step
 }
 
-void startProximal() {
-	TIFR1 |= _BV(OCF1B);
-	TIMSK1 |= _BV(OCIE1B);
-	OCR1B = TCNT1 + _proximalCommands[_proximalIndex];
+void startProximal(uint16_t feed) {
+	TIMSK1 |= _BV(OCIE1B);				//Output compare register B Enable
+	OCR1B = TCNT1 + feed;				//Start timer for first step
 }
 
 /*
- *			COMMUNICATION FUNCTION
+ *			COMMUNICATION FUNCTIONS
  */
 
-void recieveCommand(uint8_t flags, uint16_t data) {
-
-	if ((flags & COMMAND_FLAG) > 0) {
-		if ((flags & MOTOR_FLAG) > 0) {
-			_middleCommands[_middleTop] = data;
-			if (_middleTop == _middleIndex)
-				startMiddle();
-			_middleTop++;
-			if ((_middleTop + 1) == _middleIndex)
-				_isFull == true;
-		} else {
-			_proximalCommands[_proximalTop] = data;
-			if (_proximalTop == _proximalIndex)
-				startProximal();
-			_proximalTop++;
-			if ((_proximalTop + 1) == _proximalIndex)
-				_isFull == true;
+//Adds commands received from the serial connection onto the command queue
+void addToQueue(uint8_t flags, uint16_t feed) {
+	Command *insert = new Command(flags, feed);
+	if ((flags & MOTOR_FLAG_BIT) == 0) {	//Middle Command
+		if (_middleTail) {					//Tail exists, add command onto the tail
+			_middleTail->tail = insert;
+			_middleTail = _middleTail->tail;
 		}
-	}	
+		else if (_middleHead) {				//Head exists, add command onto the head
+			_middleHead->tail = insert;
+			_middleTail = insert;
+		}
+		else {								//Head doesn't exists, add command as the head
+			_middleHead = insert;			
+			startMiddle(feed);				//Start timer
+		}
+	} else {								//Proximal Command
+		if (_proximalTail) {
+			_proximalTail->tail = insert;
+			_proximalTail = _proximalTail->tail;
+		}
+		else if (_proximalHead) {
+			_proximalHead->tail = insert;
+			_proximalTail = insert;
+		}
+		else {
+			_proximalHead = insert;
+			startProximal(feed);
+		}
+	}
+	_commandCount++;
 }
 
-void serialRecieve() {
-	while (!_isFull && Serial.available() > 0) {
-		uint8_t data = Serial.read();
-		recieveCommand(data, (Serial.read() << 8 | Serial.read()));
+/*
+ * I ran into a lot of issues trying to nail down a
+ * reliable communication protocol.
+ * Keeping the arduino's serial communications up with 
+ * the speed required for 1/16th microsteps was a real pain.
+ * Alongside this, avoiding buffer overflows, and running
+ * out of SRAM.
+ * Using a handshaking approach, the Arduino will respond
+ * after recieving data letting the host know it is ready to 
+ * recieve more data. The data is recieved in blocks
+ * Pauses transmissions if it'll get close to filling the SRAM.
+ */
+
+void readSerial() {	
+	uint8_t length = Serial.available();
+	if (length > 0) {
+		byte input[length];
+		Serial.readBytes(input, length);				//Reading all data available
+
+		if ((length + _commandCount) < SRAM_LIMIT)	//Estimating SRAM Usage
+			Serial.write(1);
+		else
+			_ready = false;
+
+		int i = 0;										//Loops through inputted data
+		while(i < length) {
+			uint8_t flags = input[i++];
+			if ((flags & COMMAND_FLAG) > 0) {
+				uint16_t feed = (input[i++] << 8);
+				feed |= input[i++];
+				addToQueue(flags, feed);
+			}
+		}
 	}
 }
 
 void loop() {
-	if (!_isFull && Serial.available() > 0)
-		serialRecieve();
+	if (!_ready) {
+		if (_commandCount < SRAM_LIMIT) {				//SRAM clear, resume communication
+			_ready = true;
+			Serial.write(1);
+		}
+	}
+	else
+		readSerial();
 }
